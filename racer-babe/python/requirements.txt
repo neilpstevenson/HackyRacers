@@ -1,1 +1,8 @@
-test
+# This file contails the Python3 requirements to be installed
+# using pip3, e.g.
+#   pip install -r requirements.txt
+smbus
+sparkfun-pi-servo-hat
+approxeng.input
+
+
