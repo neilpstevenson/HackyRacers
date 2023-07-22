@@ -4,5 +4,5 @@
 smbus
 sparkfun-pi-servo-hat
 approxeng.input
-
+pySerial
 

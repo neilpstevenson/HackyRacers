@@ -9,23 +9,23 @@ servo_hat = pi_servo_hat.PiServoHat()
 # Restart Servo Hat (in case Hat is frozen/locked)
 servo_hat.restart()
 sleep(0.5)
+# Make more responsive
+servo_hat.set_pwm_frequency(200)
         
 while True:
     try:
         with ControllerResource() as joystick:
             print('Found a joystick and connected')
             while joystick.connected:
-                # Do stuff with your joystick here!
-                # ....
-                # ....
+                right_x = joystick.rx
                 left_x = joystick.lx
                 left_y = joystick.ly
-                #print(f"x={left_x}, y={left_y}")
+                print(f"x={left_x}, y={left_y}, steer={right_x}")
                 
                 # update the steering servo
-                servo_hat.move_servo_position(0, 55 - left_x * 25)
+                servo_hat.move_servo_position(0, 55 - right_x * 25)
                 # update the speed ESC
-                servo_hat.move_servo_position(1, 55 - left_y * 25)
+                servo_hat.move_servo_position(1, left_y * 15 + 32)
                 
                 sleep(0.02)
                 
