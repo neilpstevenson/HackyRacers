@@ -6,3 +6,9 @@ sparkfun-pi-servo-hat
 approxeng.input
 pySerial
 
+# For Arducam with OpenCV
+opencv-python
+ArducamDepthCamera
+numpy
+
+simple-pid
