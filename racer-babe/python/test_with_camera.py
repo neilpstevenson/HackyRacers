@@ -4,6 +4,8 @@ import numpy as np
 import ArducamDepthCamera as ac
 from time import sleep
 from approxeng.input.selectbinder import ControllerResource
+from approxeng.input.dualshock4 import DualShock4
+from approxeng.input.selectbinder import ControllerResource, ControllerRequirement, ControllerNotFoundError
 import pi_servo_hat
 import time
 from simple_pid import PID
@@ -13,7 +15,11 @@ print(dir(ac))
 # PID
 pid = PID(2.0, 0.0, 0.2, output_limits=(-1.0,1.0), sample_time=0.02, setpoint = 1.0)
 
-MAX_DISTANCE = 4
+MAX_DISTANCE = 4    # Metres
+
+steering_centre = 110
+speed_idle = 64
+auto_speed = 0.4
 
 def process_frame(depth_buf: np.ndarray, amplitude_buf: np.ndarray) -> np.ndarray:
         
@@ -90,7 +96,9 @@ if __name__ == "__main__":
             # Make more responsive
             servo_hat.set_pwm_frequency(200)
             
-            with ControllerResource() as joystick:
+            mode = 'manual'
+            
+            with ControllerResource(ControllerRequirement(require_class=DualShock4)) as joystick:
                 while True:
                     frame = cam.requestFrame(200)
                     if frame != None:
@@ -118,7 +126,7 @@ if __name__ == "__main__":
                             sys.exit(0)
                         
                         # Update the servo
-                        if(not np.isnan(distance)):
+                        if(mode != 'manual' and not np.isnan(distance)):
                             # Simple filter
                             filtered_distance = 0.9*filtered_distance + 0.1*distance
                             # Apply PID control
@@ -126,17 +134,57 @@ if __name__ == "__main__":
                             
                             # update the steering servo
                             print(f"steer = {steer}")
-                            servo_hat.move_servo_position(0, 110 - steer* 50, 180)
+                            servo_hat.move_servo_position(0, steering_centre - steer * 50, 180)
+                        else:
+                            # Manual update
+                            right_x = joystick.rx
+                            servo_hat.move_servo_position(0, steering_centre - right_x * 50, 180)
                             
                         # update the speed ESC
                         if(joystick.connected):
-                            left_y = joystick.ly
-                            servo_hat.move_servo_position(1, left_y * 64 + 64, 180)
+                            if(mode == 'auto'):
+                                # Fixed speed, but slow down when cornering
+                                speed = auto_speed * (1.0-abs(steer/3))
+                            else:
+                                # Manual control
+                                left_y = joystick.ly
+                                speed = left_y
+ 
+                            servo_hat.move_servo_position(1, speed * speed_idle + speed_idle, 180)
+                            print(f"speed = {speed}")
+                                
+                            # Check mode switch
+                            presses = joystick.check_presses()
+                            if(presses.square):
+                                if(mode == 'manual'):
+                                    mode = 'steer'
+                                    joystick.set_leds(hue=0.66) # Blue
+                                    joystick.rumble(milliseconds=200)
+                                elif(mode == 'steer'):
+                                    mode = 'auto'
+                                    joystick.set_leds(hue=0.0) # Red
+                                    joystick.rumble(milliseconds=200)
+                                else:
+                                    mode = 'manual'
+                                    joystick.set_leds(hue=0.33) # Green
+                                    joystick.rumble(milliseconds=200)
+                                print(f'MODE now {mode}')
+                            elif(presses.dup and auto_speed < 1):
+                                auto_speed += 0.05
+                            elif(presses.ddown and auto_speed > 0.1):
+                                auto_speed -= 0.05
+                                
                         else:
                             print("Jotstick lost - stopping")
-                            servo_hat.move_servo_position(1, 64, 180)
+                            servo_hat.move_servo_position(1, speed_idle, 180)
                             break
                      
-        except IOError:
+        except IOError as e:
             print('ERROR exception - Check Controller and Servo pHAT powered up')
+            print(e)
+            try:
+                # Stop
+                servo_hat.move_servo_position(1, speed_idle, 180)
+            except:
+                pass
             sleep(1.0)
