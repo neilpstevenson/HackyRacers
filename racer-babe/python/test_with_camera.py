@@ -10,15 +10,8 @@ from simple_pid import PID
 
 print(dir(ac))
 
-servo_hat = pi_servo_hat.PiServoHat()
-# Restart Servo Hat (in case Hat is frozen/locked)
-servo_hat.restart()
-sleep(0.5)
-# Make more responsive
-servo_hat.set_pwm_frequency(200)
-
 # PID
-pid = PID(1.0, 0.0, 0.1, output_limits=(-1.0,1.0), sample_time=0.02, setpoint = 1.0)
+pid = PID(2.0, 0.0, 0.2, output_limits=(-1.0,1.0), sample_time=0.02, setpoint = 1.0)
 
 MAX_DISTANCE = 4
 
@@ -79,46 +72,71 @@ if __name__ == "__main__":
     cv2.setMouseCallback("preview",on_mouse)
     
     target_distance = 1.0
+    filtered_distance = target_distance
+
+    # Default selected rect
+    selectRect.start_x = 40
+    selectRect.start_y = 90
+    selectRect.end_x = selectRect.start_x + 8
+    selectRect.end_y = selectRect.start_y + 8
+
     
     while True:
         try:
-            frame = cam.requestFrame(200)
-            if frame != None:
-                depth_buf = frame.getDepthData()
-                amplitude_buf = frame.getAmplitudeData()
-                cam.releaseFrame(frame)
-                amplitude_buf*=(255/1024)
-                amplitude_buf = np.clip(amplitude_buf, 0, 255)
+            servo_hat = pi_servo_hat.PiServoHat()
+            # Restart Servo Hat (in case Hat is frozen/locked)
+            servo_hat.restart()
+            sleep(0.5)
+            # Make more responsive
+            servo_hat.set_pwm_frequency(200)
+            
+            with ControllerResource() as joystick:
+                while True:
+                    frame = cam.requestFrame(200)
+                    if frame != None:
+                        depth_buf = frame.getDepthData()
+                        amplitude_buf = frame.getAmplitudeData()
+                        cam.releaseFrame(frame)
+                        amplitude_buf*=(255/1024)
+                        amplitude_buf = np.clip(amplitude_buf, 0, 255)
 
-                cv2.imshow("preview_amplitude", amplitude_buf.astype(np.uint8))
-                distance = np.mean(depth_buf[selectRect.start_y:selectRect.end_y,selectRect.start_x:selectRect.end_x])
-                print("select Rect distance:", distance)
-                result_image = process_frame(depth_buf,amplitude_buf)
-                result_image = cv2.applyColorMap(result_image, cv2.COLORMAP_JET)
-                cv2.rectangle(result_image,(selectRect.start_x,selectRect.start_y),(selectRect.end_x,selectRect.end_y),(128,128,128), 1)
-                cv2.rectangle(result_image,(followRect.start_x,followRect.start_y),(followRect.end_x,followRect.end_y),(255,255,255), 1)
-        
-                cv2.imshow("preview",result_image)
+                        cv2.imshow("preview_amplitude", amplitude_buf.astype(np.uint8))
+                        distance = np.mean(depth_buf[selectRect.start_y:selectRect.end_y,selectRect.start_x:selectRect.end_x])
+                        print("select Rect distance:", distance)
+                        result_image = process_frame(depth_buf,amplitude_buf)
+                        result_image = cv2.applyColorMap(result_image, cv2.COLORMAP_JET)
+                        cv2.rectangle(result_image,(selectRect.start_x,selectRect.start_y),(selectRect.end_x,selectRect.end_y),(128,128,128), 1)
+                        cv2.rectangle(result_image,(followRect.start_x,followRect.start_y),(followRect.end_x,followRect.end_y),(255,255,255), 1)
+                
+                        cv2.imshow("preview",result_image)
 
-                key = cv2.waitKey(1)
-                if key == ord("q"):
-                    exit_ = True
-                    cam.stop()
-                    cam.close()
-                    sys.exit(0)
-                
-                # Update the servo
-                if(not np.isnan(distance)):
-                    #steer = min(max(distance - target_distance, -1.0), 1.0)
-                    steer = pid(distance)
-                    print(f"steer = {steer}")
-                    
-                    # update the steering servo
-                    servo_hat.move_servo_position(0, 55 - steer* 25)
-                    
-                # update the speed ESC
-                #servo_hat.move_servo_position(1, left_y * 15 + 32)
-                
+                        key = cv2.waitKey(1)
+                        if key == ord("q"):
+                            exit_ = True
+                            cam.stop()
+                            cam.close()
+                            sys.exit(0)
+                        
+                        # Update the servo
+                        if(not np.isnan(distance)):
+                            # Simple filter
+                            filtered_distance = 0.9*filtered_distance + 0.1*distance
+                            # Apply PID control
+                            steer = pid(filtered_distance)
+                            
+                            # update the steering servo
+                            print(f"steer = {steer}")
+                            servo_hat.move_servo_position(0, 110 - steer* 50, 180)
+                            
+                        # update the speed ESC
+                        if(joystick.connected):
+                            left_y = joystick.ly
+                            servo_hat.move_servo_position(1, left_y * 64 + 64, 180)
+                        else:
+                            print("Jotstick lost - stopping")
+                            servo_hat.move_servo_position(1, 64, 180)
+                            break
+                     
         except IOError:
-            print('ERROR exception - Check Servo pHAT powered up')
+            print('ERROR exception - Check Controller and Servo pHAT powered up')
             sleep(1.0)
