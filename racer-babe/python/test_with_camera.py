@@ -12,14 +12,22 @@ from simple_pid import PID
 
 print(dir(ac))
 
-# PID
-pid = PID(2.0, 0.0, 0.2, output_limits=(-1.0,1.0), sample_time=0.02, setpoint = 1.0)
-
 MAX_DISTANCE = 4    # Metres
+DEFAULT_REGION_X = 30
+DEFAULT_REGION_Y = 70  # From top
+REGION_WIDTH = 16   # Width in pixels
+REGION_HEIGHT = 8   # Height in pixels
+
+WALL_FOLLOW_DISTANCE = 1.0 * 1.4  # Metres to the left, at around 45degs
 
 steering_centre = 110
 speed_idle = 64
 auto_speed = 0.4
+speed_deadband = 0.2    # ESC ignore anthing below this
+
+# PID
+pid = PID(1.0, 0.0, 0.6, output_limits=(-1.0,1.0), sample_time=0.01, setpoint = WALL_FOLLOW_DISTANCE)
+
 
 def process_frame(depth_buf: np.ndarray, amplitude_buf: np.ndarray) -> np.ndarray:
         
@@ -51,15 +59,15 @@ def on_mouse(event, x, y, flags, param):
         pass
 
     elif event == cv2.EVENT_LBUTTONUP:
-        selectRect.start_x = x - 4 if x - 4 > 0 else 0
-        selectRect.start_y = y - 4 if y - 4 > 0 else 0
-        selectRect.end_x = x + 4 if x + 4 < 240 else 240
-        selectRect.end_y=  y + 4 if y + 4 < 180 else 180
+        selectRect.start_x = x - (REGION_WIDTH//2) if x - (REGION_WIDTH//2) > 0 else 0
+        selectRect.start_y = y - (REGION_HEIGHT//2) if y - (REGION_HEIGHT//2) > 0 else 0
+        selectRect.end_x = x + (REGION_WIDTH//2) if x + (REGION_WIDTH//2) < 240 else 240
+        selectRect.end_y=  y + (REGION_HEIGHT//2) if y + (REGION_HEIGHT//2) < 180 else 180
     else:
-        followRect.start_x = x - 4 if x - 4 > 0 else 0
-        followRect.start_y = y - 4 if y - 4 > 0 else 0
-        followRect.end_x = x + 4 if x + 4 < 240 else 240
-        followRect.end_y = y + 4 if y + 4 < 180 else 180
+        followRect.start_x = x - (REGION_WIDTH//2) if x - (REGION_WIDTH//2) > 0 else 0
+        followRect.start_y = y - (REGION_HEIGHT//2) if y - (REGION_HEIGHT//2) > 0 else 0
+        followRect.end_x = x + (REGION_WIDTH//2) if x + (REGION_WIDTH//2) < 240 else 240
+        followRect.end_y = y + (REGION_HEIGHT//2) if y + (REGION_HEIGHT//2) < 180 else 180
         
 def usage(argv0):
     print("Usage: python "+argv0+" [options]")
@@ -81,10 +89,10 @@ if __name__ == "__main__":
     filtered_distance = target_distance
 
     # Default selected rect
-    selectRect.start_x = 40
-    selectRect.start_y = 90
-    selectRect.end_x = selectRect.start_x + 8
-    selectRect.end_y = selectRect.start_y + 8
+    selectRect.start_x = DEFAULT_REGION_X
+    selectRect.start_y = DEFAULT_REGION_Y
+    selectRect.end_x = selectRect.start_x + REGION_WIDTH
+    selectRect.end_y = selectRect.start_y + REGION_HEIGHT
 
     
     while True:
@@ -108,7 +116,11 @@ if __name__ == "__main__":
                         amplitude_buf*=(255/1024)
                         amplitude_buf = np.clip(amplitude_buf, 0, 255)
 
-                        cv2.imshow("preview_amplitude", amplitude_buf.astype(np.uint8))
+                        amplitutude_image = amplitude_buf.astype(np.uint8)
+                        cv2.rectangle(amplitutude_image,(selectRect.start_x,selectRect.start_y),(selectRect.end_x,selectRect.end_y),(128,128,128), 1)
+                        cv2.rectangle(amplitutude_image,(followRect.start_x,followRect.start_y),(followRect.end_x,followRect.end_y),(255,255,255), 1)
+                        cv2.imshow("preview_amplitude", amplitutude_image)
+                        
                         distance = np.mean(depth_buf[selectRect.start_y:selectRect.end_y,selectRect.start_x:selectRect.end_x])
                         print("select Rect distance:", distance)
                         result_image = process_frame(depth_buf,amplitude_buf)
@@ -125,12 +137,14 @@ if __name__ == "__main__":
                             cam.close()
                             sys.exit(0)
                         
-                        # Update the servo
+                        # Update the steering servo
                         if(mode != 'manual' and not np.isnan(distance)):
                             # Simple filter
                             filtered_distance = 0.9*filtered_distance + 0.1*distance
                             # Apply PID control
                             steer = pid(filtered_distance)
+                            # Adjust accoring to current speed
+                            #steer = steer * (1 - (speed - speed_deadband)*0.5)
                             
                             # update the steering servo
                             print(f"steer = {steer}")
@@ -156,23 +170,33 @@ if __name__ == "__main__":
                             # Check mode switch
                             presses = joystick.check_presses()
                             if(presses.square):
+                                # Switch between manual and auto
                                 if(mode == 'manual'):
                                     mode = 'steer'
+                                    pid.reset()
+                                    filtered_distance = distance
                                     joystick.set_leds(hue=0.66) # Blue
-                                    joystick.rumble(milliseconds=200)
-                                elif(mode == 'steer'):
-                                    mode = 'auto'
-                                    joystick.set_leds(hue=0.0) # Red
                                     joystick.rumble(milliseconds=200)
                                 else:
                                     mode = 'manual'
                                     joystick.set_leds(hue=0.33) # Green
                                     joystick.rumble(milliseconds=200)
                                 print(f'MODE now {mode}')
+                            elif(presses.circle):
+                                # Switch between full auto and steer only
+                                if(mode == 'steer'):
+                                    mode = 'auto'
+                                    joystick.set_leds(hue=0.0) # Red
+                                    joystick.rumble(milliseconds=200)
+                                else:
+                                    mode = 'steer'
+                                    joystick.set_leds(hue=0.66) # Blue
+                                    joystick.rumble(milliseconds=200)
+                                print(f'MODE now {mode}')
                             elif(presses.dup and auto_speed < 1):
-                                auto_speed += 0.05
+                                auto_speed += 0.03
                             elif(presses.ddown and auto_speed > 0.1):
-                                auto_speed -= 0.05
+                                auto_speed -= 0.03
                                 
                         else:
                             print("Jotstick lost - stopping")
