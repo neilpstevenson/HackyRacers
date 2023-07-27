@@ -13,20 +13,26 @@ from simple_pid import PID
 print(dir(ac))
 
 MAX_DISTANCE = 4    # Metres
+# Camera is 240x180
 DEFAULT_REGION_X = 30
-DEFAULT_REGION_Y = 70  # From top
+DEFAULT_REGION_Y = 70  # From top (70 is approx 240mm above ground at target distance)
+AHEAD_REGION_X = 220
+AHEAD_REGION_Y = 70  # From top
 REGION_WIDTH = 16   # Width in pixels
 REGION_HEIGHT = 8   # Height in pixels
 
 WALL_FOLLOW_DISTANCE = 1.0 * 1.4  # Metres to the left, at around 45degs
 
-steering_centre = 110
-speed_idle = 64
+STEERING_SCALE = 63
+STEERING_CENTRE = 110
+SPEED_SCALE = 64
+SPEED_IDLE = 64
+
 auto_speed = 0.4
 speed_deadband = 0.2    # ESC ignore anthing below this
 
 # PID
-pid = PID(1.0, 0.0, 0.6, output_limits=(-1.0,1.0), sample_time=0.01, setpoint = WALL_FOLLOW_DISTANCE)
+pid = PID(1.5, 0.0, 0.8, output_limits=(-1.0,1.0), sample_time=0.01, setpoint = WALL_FOLLOW_DISTANCE)
 
 
 def process_frame(depth_buf: np.ndarray, amplitude_buf: np.ndarray) -> np.ndarray:
@@ -49,7 +55,7 @@ class UserRect():
         self.end_y = 0
 
 selectRect = UserRect()
-
+aheadRect = UserRect()
 followRect = UserRect()
 
 def on_mouse(event, x, y, flags, param):
@@ -85,14 +91,18 @@ if __name__ == "__main__":
     cv2.namedWindow("preview", cv2.WINDOW_AUTOSIZE)
     cv2.setMouseCallback("preview",on_mouse)
     
-    target_distance = 1.0
-    filtered_distance = target_distance
+    filtered_distance = WALL_FOLLOW_DISTANCE
 
     # Default selected rect
     selectRect.start_x = DEFAULT_REGION_X
     selectRect.start_y = DEFAULT_REGION_Y
     selectRect.end_x = selectRect.start_x + REGION_WIDTH
     selectRect.end_y = selectRect.start_y + REGION_HEIGHT
+    # Default forward sense rect
+    aheadRect.start_x = AHEAD_REGION_X
+    aheadRect.start_y = AHEAD_REGION_Y
+    aheadRect.end_x = aheadRect.start_x + REGION_WIDTH
+    aheadRect.end_y = aheadRect.start_y + REGION_HEIGHT
 
     
     while True:
@@ -118,14 +128,17 @@ if __name__ == "__main__":
 
                         amplitutude_image = amplitude_buf.astype(np.uint8)
                         cv2.rectangle(amplitutude_image,(selectRect.start_x,selectRect.start_y),(selectRect.end_x,selectRect.end_y),(128,128,128), 1)
+                        cv2.rectangle(amplitutude_image,(aheadRect.start_x,aheadRect.start_y),(aheadRect.end_x,aheadRect.end_y),(128,128,128), 1)
                         cv2.rectangle(amplitutude_image,(followRect.start_x,followRect.start_y),(followRect.end_x,followRect.end_y),(255,255,255), 1)
                         cv2.imshow("preview_amplitude", amplitutude_image)
                         
                         distance = np.mean(depth_buf[selectRect.start_y:selectRect.end_y,selectRect.start_x:selectRect.end_x])
-                        print("select Rect distance:", distance)
+                        ahead_distance = np.mean(depth_buf[aheadRect.start_y:aheadRect.end_y,aheadRect.start_x:aheadRect.end_x])
+                        print(f"Left distance: {distance}mm, Ahead: {ahead_distance}mm")
                         result_image = process_frame(depth_buf,amplitude_buf)
                         result_image = cv2.applyColorMap(result_image, cv2.COLORMAP_JET)
                         cv2.rectangle(result_image,(selectRect.start_x,selectRect.start_y),(selectRect.end_x,selectRect.end_y),(128,128,128), 1)
+                        cv2.rectangle(result_image,(aheadRect.start_x,aheadRect.start_y),(aheadRect.end_x,aheadRect.end_y),(128,128,128), 1)
                         cv2.rectangle(result_image,(followRect.start_x,followRect.start_y),(followRect.end_x,followRect.end_y),(255,255,255), 1)
                 
                         cv2.imshow("preview",result_image)
@@ -136,23 +149,27 @@ if __name__ == "__main__":
                             cam.stop()
                             cam.close()
                             sys.exit(0)
-                        
+
+                        # To prevent ploughing into obstructions ahead,
+                        # use the ahead distance if it's nearer than the wall distance
+                        min_distance = min(distance,ahead_distance)
+
                         # Update the steering servo
                         if(mode != 'manual' and not np.isnan(distance)):
                             # Simple filter
-                            filtered_distance = 0.9*filtered_distance + 0.1*distance
+                            filtered_distance = 0.9*filtered_distance + 0.1*min_distance
                             # Apply PID control
                             steer = pid(filtered_distance)
                             # Adjust accoring to current speed
                             #steer = steer * (1 - (speed - speed_deadband)*0.5)
                             
                             # update the steering servo
-                            print(f"steer = {steer}")
-                            servo_hat.move_servo_position(0, steering_centre - steer * 50, 180)
+                            print(f"steer = {steer}, dist = {filtered_distance}")
+                            servo_hat.move_servo_position(0, STEERING_CENTRE - steer * STEERING_SCALE, 180)
                         else:
                             # Manual update
                             right_x = joystick.rx
-                            servo_hat.move_servo_position(0, steering_centre - right_x * 50, 180)
+                            servo_hat.move_servo_position(0, STEERING_CENTRE - right_x * STEERING_SCALE, 180)
                             
                         # update the speed ESC
                         if(joystick.connected):
@@ -164,7 +181,7 @@ if __name__ == "__main__":
                                 left_y = joystick.ly
                                 speed = left_y
  
-                            servo_hat.move_servo_position(1, speed * speed_idle + speed_idle, 180)
+                            servo_hat.move_servo_position(1, speed * SPEED_SCALE + SPEED_IDLE, 180)
                             print(f"speed = {speed}")
                                 
                             # Check mode switch
@@ -174,7 +191,7 @@ if __name__ == "__main__":
                                 if(mode == 'manual'):
                                     mode = 'steer'
                                     pid.reset()
-                                    filtered_distance = distance
+                                    filtered_distance = min_distance
                                     joystick.set_leds(hue=0.66) # Blue
                                     joystick.rumble(milliseconds=200)
                                 else:
@@ -188,7 +205,7 @@ if __name__ == "__main__":
                                     mode = 'auto'
                                     joystick.set_leds(hue=0.0) # Red
                                     joystick.rumble(milliseconds=200)
-                                else:
+                                elif(mode == 'auto'):
                                     mode = 'steer'
                                     joystick.set_leds(hue=0.66) # Blue
                                     joystick.rumble(milliseconds=200)
@@ -200,7 +217,7 @@ if __name__ == "__main__":
                                 
                         else:
                             print("Jotstick lost - stopping")
-                            servo_hat.move_servo_position(1, speed_idle, 180)
+                            servo_hat.move_servo_position(1, SPEED_IDLE, 180)
                             break
                      
         except IOError as e:
